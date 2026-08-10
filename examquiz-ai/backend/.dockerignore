@@ -1,0 +1,11 @@
+target
+*.iml
+.idea
+.vscode
+.mvn
+.git
+.gitignore
+*.log
+application.properties
+application-dev.properties
+application-prod.properties

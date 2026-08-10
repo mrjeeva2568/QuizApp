@@ -1,0 +1,43 @@
+# =========================================
+# ExamQuiz AI - Backend PRODUCTION overrides
+# Activate with SPRING_PROFILES_ACTIVE=prod (Spring Boot then layers this
+# file on top of application.properties, overriding only what's listed here).
+# Copy to application-prod.properties. Same rule as the base file: every
+# value here should come from an environment variable, never hardcoded.
+# =========================================
+
+# ---------- Logging ----------
+# DEBUG-level app logs and Spring Security logs are fine for local dev, too
+# noisy (and occasionally sensitive) for production.
+logging.level.root=WARN
+logging.level.com.examquizai.backend=INFO
+logging.level.org.springframework.security=WARN
+
+# ---------- Error handling ----------
+# These match Spring Boot's own defaults - made explicit here so it's a
+# documented decision, not an unreviewed default: never leak a stack trace,
+# internal exception message, or validation-binding detail to a client.
+server.error.include-stacktrace=never
+server.error.include-message=never
+server.error.include-binding-errors=never
+server.error.include-exception=false
+
+# ---------- API documentation ----------
+# Swagger UI / OpenAPI JSON are genuinely useful in dev, but every endpoint
+# they document (including request/response shapes) is also useful
+# reconnaissance for an attacker. Off by default in prod; flip the env var
+# on temporarily if you need to debug against a deployed environment.
+springdoc.api-docs.enabled=${SWAGGER_ENABLED:false}
+springdoc.swagger-ui.enabled=${SWAGGER_ENABLED:false}
+
+# ---------- Actuator ----------
+# Only health/info were ever exposed (see base application.properties) - this
+# line is just making the intent explicit for anyone auditing the prod config
+# without needing to cross-reference the base file.
+management.endpoint.health.show-details=never
+
+# ---------- MongoDB Atlas connection pool ----------
+# Sane defaults for a small-to-medium deployment; tune based on observed load.
+# These can also be set directly in the mongodb+srv:// URI as query params
+# (e.g. &maxPoolSize=50) if you prefer keeping pool config alongside the URI.
+spring.data.mongodb.uuid-representation=standard

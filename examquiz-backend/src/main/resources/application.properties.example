@@ -1,0 +1,34 @@
+# =========================================
+# ExamQuiz AI - Backend Configuration
+# =========================================
+
+spring.application.name=examquiz-backend
+server.port=8080
+server.servlet.context-path=/
+
+# ---------- MongoDB Atlas ----------
+
+spring.data.mongodb.uri=mongodb+srv://Jeeva:Jeeva115@cluster0.htzb0tr.mongodb.net/examquizai?retryWrites=true&w=majority&appName=Cluster0
+spring.data.mongodb.database=examquizai
+
+# ---------- JWT ----------
+
+app.jwt.secret=${JWT_SECRET:CHANGE_ME_BASE64_ENCODED_SECRET_MIN_256_BITS}
+app.jwt.access-token-expiration-ms=${JWT_ACCESS_EXP_MS:3600000}
+app.jwt.refresh-token-expiration-ms=${JWT_REFRESH_EXP_MS:604800000}
+app.jwt.issuer=examquiz-ai
+
+# ---------- Bootstrap ADMIN account ----------
+
+app.admin.seed-enabled=${ADMIN_SEED_ENABLED:true}
+app.admin.email=${ADMIN_EMAIL:admin@examquizai.com}
+app.admin.password=${ADMIN_PASSWORD:CHANGE_ME_STRONG_PASSWORD}
+app.admin.full-name=${ADMIN_FULL_NAME:Platform Administrator}
+
+# ---------- CORS ----------
+
+app.cors.allowed-origins=${CORS_ALLOWED_ORIGINS:http://localhost:5173}
+app.cors.allowed-methods=GET,POST,PUT,PATCH,DELETE,OPTIONS
+app.cors.allowed-headers=*
+app.cors.allow-credentials=true
+app.cors.max-age=3600

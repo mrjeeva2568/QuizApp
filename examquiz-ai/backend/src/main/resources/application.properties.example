@@ -1,0 +1,84 @@
+# =========================================
+# ExamQuiz AI - Backend Configuration Sample
+# Copy to application.properties (or application-dev.properties)
+# and fill in real values. NEVER commit real secrets.
+# =========================================
+
+# ---------- Application ----------
+spring.application.name=examquiz-backend
+server.port=8080
+server.servlet.context-path=/
+
+# ---------- MongoDB Atlas ----------
+# Use env var in production: ${MONGODB_URI}
+spring.data.mongodb.uri=${MONGODB_URI:mongodb+srv://<username>:<password>@<cluster-url>/examquizai?retryWrites=true&w=majority}
+spring.data.mongodb.database=examquizai
+
+# ---------- JWT ----------
+# Base64-encoded secret, min 256 bits for HS256
+app.jwt.secret=${JWT_SECRET:CHANGE_ME_BASE64_ENCODED_SECRET_MIN_256_BITS}
+app.jwt.access-token-expiration-ms=${JWT_ACCESS_EXP_MS:3600000}
+app.jwt.refresh-token-expiration-ms=${JWT_REFRESH_EXP_MS:604800000}
+app.jwt.issuer=examquiz-ai
+
+# ---------- Bootstrap ADMIN account ----------
+# There is no public "admin registration" endpoint. On startup, if enabled and no
+# account with this email exists yet, one ADMIN account is created automatically.
+# Set seed-enabled=false after first run in production if you prefer to manage
+# admin accounts a different way (e.g. directly in MongoDB Atlas).
+app.admin.seed-enabled=${ADMIN_SEED_ENABLED:true}
+app.admin.email=${ADMIN_EMAIL:admin@examquizai.com}
+app.admin.password=${ADMIN_PASSWORD:CHANGE_ME_STRONG_PASSWORD}
+app.admin.full-name=${ADMIN_FULL_NAME:Platform Administrator}
+
+# ---------- CORS ----------
+app.cors.allowed-origins=${CORS_ALLOWED_ORIGINS:http://localhost:5173}
+app.cors.allowed-methods=GET,POST,PUT,PATCH,DELETE,OPTIONS
+app.cors.allowed-headers=*
+app.cors.allow-credentials=true
+app.cors.max-age=3600
+
+# ---------- UiPath Agentic AI integration ----------
+# The agent itself is already built in UiPath; this backend only calls it over REST.
+# ALL values below must come from environment variables in any real environment -
+# never commit real credentials, and this file should only ever contain placeholders.
+
+# Base URL of the UiPath Agent REST API and the path that invokes your specific
+# published agent. Adjust agent-endpoint to match your actual agent's route.
+app.uipath.base-url=${UIPATH_BASE_URL:}
+app.uipath.agent-endpoint=${UIPATH_AGENT_ENDPOINT:}
+
+# OAuth2 client-credentials token endpoint (UiPath Identity Server).
+# Leave blank to use "static API key" mode instead: UIPATH_CLIENT_SECRET is then
+# sent directly as the bearer token on every agent call, with no token exchange.
+app.uipath.token-url=${UIPATH_TOKEN_URL:}
+app.uipath.tenant-name=${UIPATH_TENANT_NAME:}
+app.uipath.client-id=${UIPATH_CLIENT_ID:}
+app.uipath.client-secret=${UIPATH_CLIENT_SECRET:}
+app.uipath.scope=${UIPATH_SCOPE:}
+
+# Timeouts (milliseconds) - keep well under any upstream gateway/load-balancer timeout.
+app.uipath.connect-timeout-ms=${UIPATH_CONNECT_TIMEOUT_MS:5000}
+app.uipath.response-timeout-ms=${UIPATH_RESPONSE_TIMEOUT_MS:30000}
+
+# Retry policy for transient failures (5xx, network errors, timeouts) - NOT applied
+# to 4xx client errors or authentication failures, since retrying those can't help.
+app.uipath.max-retry-attempts=${UIPATH_MAX_RETRY_ATTEMPTS:3}
+app.uipath.retry-backoff-ms=${UIPATH_RETRY_BACKOFF_MS:500}
+
+# ---------- Logging ----------
+logging.level.root=INFO
+logging.level.com.examquizai.backend=DEBUG
+logging.level.org.springframework.security=INFO
+
+# ---------- Jackson ----------
+spring.jackson.default-property-inclusion=NON_NULL
+spring.jackson.serialization.write-dates-as-timestamps=false
+
+# ---------- Actuator ----------
+management.endpoints.web.exposure.include=health,info
+management.endpoint.health.show-details=when-authorized
+
+# ---------- OpenAPI / Swagger ----------
+springdoc.api-docs.path=/api-docs
+springdoc.swagger-ui.path=/swagger-ui.html
