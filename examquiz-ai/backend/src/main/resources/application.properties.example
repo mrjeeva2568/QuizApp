@@ -45,17 +45,17 @@ app.cors.max-age=3600
 
 # Base URL of the UiPath Agent REST API and the path that invokes your specific
 # published agent. Adjust agent-endpoint to match your actual agent's route.
-app.uipath.base-url=${UIPATH_BASE_URL:}
+app.uipath.base-url=https://cloud.uipath.com/recaiwqgzl/DefaultTenant/orchestrator_
 app.uipath.agent-endpoint=${UIPATH_AGENT_ENDPOINT:}
 
 # OAuth2 client-credentials token endpoint (UiPath Identity Server).
 # Leave blank to use "static API key" mode instead: UIPATH_CLIENT_SECRET is then
 # sent directly as the bearer token on every agent call, with no token exchange.
-app.uipath.token-url=${UIPATH_TOKEN_URL:}
-app.uipath.tenant-name=${UIPATH_TENANT_NAME:}
-app.uipath.client-id=${UIPATH_CLIENT_ID:}
-app.uipath.client-secret=${UIPATH_CLIENT_SECRET:}
-app.uipath.scope=${UIPATH_SCOPE:}
+app.uipath.token-url=https://cloud.uipath.com/recaiwqgzl/identity_/connect/token
+app.uipath.tenant-name=DefaultTenant
+app.uipath.client-id=48f09ab9-c53a-4cf3-96ca-2faf1f32be0e
+app.uipath.client-secret=^Rn)8tG1jdp?K(GCHSN2~hDlZ)5%SnG?FH4pS~~$QJgiNqB~U5)P1SPQB9cfMb1A
+app.uipath.scope=OR.Execution OR.Jobs
 
 # Timeouts (milliseconds) - keep well under any upstream gateway/load-balancer timeout.
 app.uipath.connect-timeout-ms=${UIPATH_CONNECT_TIMEOUT_MS:5000}
