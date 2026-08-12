@@ -35,34 +35,27 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * Integration layer that calls the UiPath Agent over REST.
+ * Integration layer that calls the UiPath Agent via the Orchestrator Jobs API.
  *
- * <p>
- * This service handles:
- * <ul>
- *     <li>UiPath authentication</li>
- *     <li>Access-token caching</li>
- *     <li>Timeouts</li>
- *     <li>Retries</li>
- *     <li>Agent request creation</li>
- *     <li>Agent response validation</li>
- *     <li>Mapping the response into QuizGenerationResponse</li>
- * </ul>
- *
- * <p>
- * Quiz generation flow:
- *
+ * <p><b>Real contract, confirmed against a live serverless Python agent (not
+ * a guessed synchronous "invoke" endpoint):</b>
  * <pre>
- * Frontend
- *     ↓
- * QuizGenerationRequest
- *     ↓
- * UiPathAgentService
- *     ↓
- * UiPath Agent
- *     ↓
- * QuizGenerationResponse
+ * 1. POST {baseUrl}/odata/Jobs/UiPath.Server.Configuration.OData.StartJobs
+ *      -&gt; { ReleaseKey, Strategy: "ModernJobsCount", JobsCount: 1,
+ *           InputArguments: "&lt;json-string&gt;" }
+ *      -&gt; returns a Job with Id, State: "Pending"
+ * 2. Poll GET {baseUrl}/odata/Jobs({id}) until State is "Successful" or "Faulted"
+ * 3. On success, OutputArguments is a JSON *string* whose parsed content is
+ *    { "content": { quizTitle, exam, subject, topic, difficulty,
+ *                    totalQuestions, questions: [...] } }
  * </pre>
+ * Every Orchestrator call requires the X-UIPATH-OrganizationUnitId header set
+ * to {@link UiPathProperties#getFolderId()} - folder-scoped tenants reject
+ * requests without it (or silently 404 the wrong release/job).
+ *
+ * <p>The agent's input schema is a Pydantic model requiring exactly:
+ * {@code exam, subject, topic, difficulty, questionCount} - note
+ * {@code questionCount}, NOT {@code numberOfQuestions}.
  */
 @Slf4j
 @Service
@@ -70,92 +63,53 @@ import java.util.concurrent.atomic.AtomicReference;
 public class UiPathAgentService implements AiAgentService {
 
     private static final String OAUTH_GRANT_TYPE = "client_credentials";
+    private static final String ORG_UNIT_HEADER = "X-UIPATH-OrganizationUnitId";
 
     private final WebClient uiPathWebClient;
     private final UiPathProperties properties;
     private final ObjectMapper objectMapper;
 
     /**
-     * Cached OAuth access token.
-     *
-     * <p>
-     * The token itself is never logged or exposed.
+     * Cached OAuth access token. Never logged or exposed.
      */
-    private final AtomicReference<CachedToken> tokenCache =
-            new AtomicReference<>();
+    private final AtomicReference<CachedToken> tokenCache = new AtomicReference<>();
 
     // =========================================================================
-    // Generate Quiz
+    // Generate Quiz (public entry point)
     // =========================================================================
 
     @Override
-    public QuizGenerationResponse generateQuiz(
-            QuizGenerationRequest request) {
-
-        Objects.requireNonNull(
-                request,
-                "QuizGenerationRequest must not be null"
-        );
-
-        Duration overallTimeout =
-                Duration.ofMillis(properties.getResponseTimeoutMs())
-                        .multipliedBy(
-                                properties.getMaxRetryAttempts() + 1L
-                        )
-                        .plus(
-                                Duration.ofMillis(
-                                        properties.getConnectTimeoutMs()
-                                )
-                        );
+    public QuizGenerationResponse generateQuiz(QuizGenerationRequest request) {
+        Objects.requireNonNull(request, "QuizGenerationRequest must not be null");
 
         try {
-
             return getValidAccessToken()
-                    .flatMap(token -> callAgent(token, request))
+                    .flatMap(token -> startJob(token, request)
+                            .flatMap(jobId -> pollUntilTerminal(token, jobId)))
+                    .map(this::extractOutputArguments)
                     .map(this::validateAndParse)
-                    .timeout(overallTimeout)
                     .block();
 
         } catch (AiAgentException ex) {
-
             // Already the correct application exception.
             throw ex;
-
         } catch (Exception ex) {
-
-            log.error(
-                    "Unexpected error while generating quiz via UiPath",
-                    ex
-            );
-
-            throw new AiAgentException(
-                    "Failed to generate quiz via the UiPath agent",
-                    ex
-            );
+            log.error("Unexpected error while generating quiz via UiPath", ex);
+            throw new AiAgentException("Failed to generate quiz via the UiPath agent", ex);
         }
     }
 
     // =========================================================================
-    // Authentication
+    // Authentication (unchanged - this part was already correct)
     // =========================================================================
 
     private Mono<String> getValidAccessToken() {
-
         CachedToken cached = tokenCache.get();
-
         if (cached != null && cached.isValid()) {
-
             return Mono.just(cached.accessToken());
         }
 
-        /*
-         * Static API key / bearer-token mode.
-         *
-         * If tokenUrl is not configured, clientSecret is treated as
-         * the configured bearer token.
-         */
         if (!StringUtils.hasText(properties.getTokenUrl())) {
-
             return Mono.just(properties.getClientSecret());
         }
 
@@ -165,556 +119,293 @@ public class UiPathAgentService implements AiAgentService {
     }
 
     private Mono<CachedToken> authenticate() {
-
-        MultiValueMap<String, String> form =
-                new LinkedMultiValueMap<>();
-
-        form.add(
-                "grant_type",
-                OAUTH_GRANT_TYPE
-        );
-
-        form.add(
-                "client_id",
-                properties.getClientId()
-        );
-
-        form.add(
-                "client_secret",
-                properties.getClientSecret()
-        );
-
+        MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
+        form.add("grant_type", OAUTH_GRANT_TYPE);
+        form.add("client_id", properties.getClientId());
+        form.add("client_secret", properties.getClientSecret());
         if (StringUtils.hasText(properties.getScope())) {
-
-            form.add(
-                    "scope",
-                    properties.getScope()
-            );
+            form.add("scope", properties.getScope());
         }
 
-        return uiPathWebClient
-                .post()
+        return uiPathWebClient.post()
                 .uri(properties.getTokenUrl())
-                .contentType(
-                        MediaType.APPLICATION_FORM_URLENCODED
-                )
-                .body(
-                        BodyInserters.fromFormData(form)
-                )
+                .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                .body(BodyInserters.fromFormData(form))
                 .retrieve()
-
-                .onStatus(
-                        HttpStatusCode::isError,
-                        response ->
-                                Mono.error(
-                                        new AiAgentAuthenticationException(
-                                                "UiPath authentication failed with status "
-                                                        + response.statusCode()
-                                        )
-                                )
-                )
-
+                .onStatus(HttpStatusCode::isError, response ->
+                        Mono.error(new AiAgentAuthenticationException(
+                                "UiPath authentication failed with status " + response.statusCode())))
                 .bodyToMono(JsonNode.class)
-
-                .timeout(
-                        Duration.ofMillis(
-                                properties.getConnectTimeoutMs()
-                                        + properties.getResponseTimeoutMs()
-                        )
-                )
-
-                .retryWhen(
-                        retrySpec("token acquisition")
-                )
-
+                .timeout(Duration.ofMillis(properties.getConnectTimeoutMs() + properties.getResponseTimeoutMs()))
+                .retryWhen(retrySpec("token acquisition"))
                 .map(this::toCachedToken);
     }
 
-    private CachedToken toCachedToken(
-            JsonNode json) {
-
-        if (json == null
-                || !json.hasNonNull("access_token")) {
-
-            throw new AiAgentAuthenticationException(
-                    "UiPath authentication response did not contain an access_token"
-            );
+    private CachedToken toCachedToken(JsonNode json) {
+        if (json == null || !json.hasNonNull("access_token")) {
+            throw new AiAgentAuthenticationException("UiPath authentication response did not contain an access_token");
         }
-
-        String accessToken =
-                json.get("access_token").asText();
-
-        long expiresInSeconds =
-                json.hasNonNull("expires_in")
-                        ? json.get("expires_in").asLong()
-                        : 3600L;
-
-        /*
-         * Refresh 60 seconds before expiry.
-         */
-        Instant expiresAt =
-                Instant.now().plusSeconds(
-                        Math.max(
-                                expiresInSeconds - 60,
-                                30
-                        )
-                );
-
-        return new CachedToken(
-                accessToken,
-                expiresAt
-        );
+        String accessToken = json.get("access_token").asText();
+        long expiresInSeconds = json.hasNonNull("expires_in") ? json.get("expires_in").asLong() : 3600L;
+        Instant expiresAt = Instant.now().plusSeconds(Math.max(expiresInSeconds - 60, 30));
+        return new CachedToken(accessToken, expiresAt);
     }
 
     // =========================================================================
-    // UiPath Agent Invocation
+    // Step 1: Start the job
     // =========================================================================
 
-    private Mono<JsonNode> callAgent(
-            String accessToken,
-            QuizGenerationRequest request) {
+    private Mono<Long> startJob(String accessToken, QuizGenerationRequest request) {
+        String uri = properties.getBaseUrl() + "/odata/Jobs/UiPath.Server.Configuration.OData.StartJobs";
 
-        String uri =
-                properties.getBaseUrl()
-                        + properties.getAgentEndpoint();
+        Map<String, Object> startInfo = new LinkedHashMap<>();
+        startInfo.put("ReleaseKey", properties.getReleaseKey());
+        startInfo.put("Strategy", "ModernJobsCount");
+        startInfo.put("JobsCount", 1);
+        startInfo.put("InputArguments", toAgentInputJson(request));
 
-        return uiPathWebClient
-                .post()
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("startInfo", startInfo);
+
+        return uiPathWebClient.post()
                 .uri(uri)
-
-                .contentType(
-                        MediaType.APPLICATION_JSON
-                )
-
-                .headers(headers -> {
-
-                    headers.setBearerAuth(
-                            accessToken
-                    );
-
-                    if (StringUtils.hasText(
-                            properties.getTenantName())) {
-
-                        headers.set(
-                                "X-UIPATH-TenantName",
-                                properties.getTenantName()
-                        );
-                    }
-                })
-
-                /*
-                 * This is where the complete quiz request is converted
-                 * into the JSON payload sent to UiPath.
-                 */
-                .bodyValue(
-                        toAgentPayload(request)
-                )
-
+                .contentType(MediaType.APPLICATION_JSON)
+                .headers(headers -> applyOrchestratorHeaders(headers, accessToken))
+                .bodyValue(body)
                 .retrieve()
-
-                // -------------------------------------------------------------
-                // Authentication errors
-                // -------------------------------------------------------------
-
-                .onStatus(
-                        status ->
-                                status.value() == 401
-                                        || status.value() == 403,
-
-                        response -> {
-
-                            /*
-                             * Clear the cached token so the next request
-                             * authenticates again.
-                             */
-                            tokenCache.set(null);
-
-                            return Mono.error(
-                                    new AiAgentAuthenticationException(
-                                            "UiPath agent rejected the request as unauthorized "
-                                                    + "(status "
-                                                    + response.statusCode()
-                                                    + ")"
-                                    )
-                            );
-                        }
-                )
-
-                // -------------------------------------------------------------
-                // Other 4xx errors
-                // -------------------------------------------------------------
-
-                .onStatus(
-                        HttpStatusCode::is4xxClientError,
-
-                        response ->
-                                Mono.error(
-                                        new AiAgentException(
-                                                "UiPath agent rejected the request "
-                                                        + "(status "
-                                                        + response.statusCode()
-                                                        + ")"
-                                        )
-                                )
-                )
-
-                // -------------------------------------------------------------
-                // 5xx errors
-                // -------------------------------------------------------------
-
-                .onStatus(
-                        HttpStatusCode::is5xxServerError,
-
-                        response ->
-                                Mono.error(
-                                        new AiAgentException(
-                                                "UiPath agent returned a server error "
-                                                        + "(status "
-                                                        + response.statusCode()
-                                                        + ")"
-                                        )
-                                )
-                )
-
+                .onStatus(status -> status.value() == 401 || status.value() == 403, response -> {
+                    tokenCache.set(null);
+                    return Mono.error(new AiAgentAuthenticationException(
+                            "UiPath agent rejected the request as unauthorized (status " + response.statusCode() + ")"));
+                })
+                .onStatus(HttpStatusCode::is4xxClientError, response ->
+                        Mono.error(new AiAgentException(
+                                "UiPath agent rejected the request (status " + response.statusCode() + ")")))
+                .onStatus(HttpStatusCode::is5xxServerError, response ->
+                        Mono.error(new AiAgentException(
+                                "UiPath agent returned a server error (status " + response.statusCode() + ")")))
                 .bodyToMono(JsonNode.class)
+                .timeout(Duration.ofMillis(properties.getResponseTimeoutMs()))
+                .retryWhen(retrySpec("job start"))
+                .flatMap(this::extractJobId);
+    }
 
-                .timeout(
-                        Duration.ofMillis(
-                                properties.getResponseTimeoutMs()
-                        )
-                )
-
-                .retryWhen(
-                        retrySpec("agent invocation")
-                );
+    private Mono<Long> extractJobId(JsonNode startJobsResponse) {
+        // StartJobs returns { "value": [ { ..., "Id": 123, ... } ] } for a single job.
+        JsonNode valueArray = startJobsResponse != null ? startJobsResponse.get("value") : null;
+        if (valueArray == null || !valueArray.isArray() || valueArray.isEmpty()) {
+            return Mono.error(new AiAgentValidationException(
+                    "UiPath StartJobs response did not contain a job in 'value'"));
+        }
+        JsonNode job = valueArray.get(0);
+        if (!job.hasNonNull("Id")) {
+            return Mono.error(new AiAgentValidationException(
+                    "UiPath StartJobs response job is missing an 'Id'"));
+        }
+        return Mono.just(job.get("Id").asLong());
     }
 
     // =========================================================================
-    // Build UiPath Request Payload
+    // Step 2: Poll until the job reaches a terminal state
+    // =========================================================================
+
+    private Mono<JsonNode> pollUntilTerminal(String accessToken, long jobId) {
+        String uri = properties.getBaseUrl() + "/odata/Jobs(" + jobId + ")";
+
+        Mono<JsonNode> singlePoll = uiPathWebClient.get()
+                .uri(uri)
+                .headers(headers -> applyOrchestratorHeaders(headers, accessToken))
+                .retrieve()
+                .onStatus(HttpStatusCode::isError, response ->
+                        Mono.error(new AiAgentException(
+                                "Failed to poll UiPath job " + jobId + " (status " + response.statusCode() + ")")))
+                .bodyToMono(JsonNode.class)
+                .timeout(Duration.ofMillis(properties.getResponseTimeoutMs()));
+
+        return singlePoll
+                .flatMap(job -> {
+                    String state = job.hasNonNull("State") ? job.get("State").asText() : "";
+                    if ("Successful".equals(state)) {
+                        return Mono.just(job);
+                    }
+                    if ("Faulted".equals(state) || "Stopped".equals(state)) {
+                        String detail = job.has("JobError") && job.get("JobError").hasNonNull("Detail")
+                                ? job.get("JobError").get("Detail").asText()
+                                : (job.hasNonNull("Info") ? job.get("Info").asText() : "no details provided");
+                        return Mono.error(new AiAgentException(
+                                "UiPath agent job " + jobId + " ended in state '" + state + "': " + detail));
+                    }
+                    // Pending / Running - not terminal yet, signal for retry below.
+                    return Mono.error(new JobNotTerminalException(state));
+                })
+                .retryWhen(Retry.fixedDelay(properties.getMaxPollAttempts(), Duration.ofMillis(properties.getPollIntervalMs()))
+                        .filter(JobNotTerminalException.class::isInstance)
+                        .onRetryExhaustedThrow((spec, signal) -> new AiAgentTimeoutException(
+                                "UiPath agent job " + jobId + " did not complete after "
+                                        + properties.getMaxPollAttempts() + " polling attempts",
+                                signal.failure())));
+    }
+
+    /**
+     * Internal signal used only to drive the polling retry loop - never
+     * surfaced to callers.
+     */
+    private static final class JobNotTerminalException extends RuntimeException {
+        JobNotTerminalException(String state) {
+            super("Job not yet terminal, current state: " + state);
+        }
+    }
+
+    // =========================================================================
+    // Step 3: Extract and parse OutputArguments
     // =========================================================================
 
     /**
-     * Converts the frontend/backend request into the JSON payload expected
-     * by the UiPath Agent.
-     *
-     * <p>
-     * Important:
-     *
-     * <pre>
-     * Exam
-     * Subject
-     * Topic
-     * Difficulty
-     * Number of Questions
-     * Question Type
-     * Additional Instructions
-     * Language
-     * </pre>
-     *
-     * are all sent to UiPath.
+     * The completed Job's {@code OutputArguments} field is itself a JSON
+     * *string* (mirroring how InputArguments is sent), so it must be parsed
+     * a second time. The parsed content is wrapped one level deeper under a
+     * "content" key - confirmed against a live successful run.
      */
-    private Map<String, Object> toAgentPayload(
-            QuizGenerationRequest request) {
+    private JsonNode extractOutputArguments(JsonNode job) {
+        if (!job.hasNonNull("OutputArguments")) {
+            throw new AiAgentValidationException("UiPath agent job completed but returned no OutputArguments");
+        }
 
-        Map<String, Object> payload =
-                new LinkedHashMap<>();
+        String outputJson = job.get("OutputArguments").asText();
+        JsonNode parsed;
+        try {
+            parsed = objectMapper.readTree(outputJson);
+        } catch (JsonProcessingException ex) {
+            throw new AiAgentValidationException(
+                    "Could not parse UiPath OutputArguments as JSON: " + ex.getOriginalMessage());
+        }
 
-        // -------------------------------------------------------------
-        // Entrance Exam
-        // -------------------------------------------------------------
-
-        payload.put(
-                "exam",
-                request.getExam() != null
-                        ? request.getExam().name()
-                        : null
-        );
-
-        // -------------------------------------------------------------
-        // Subject
-        // -------------------------------------------------------------
-
-        payload.put(
-                "subject",
-                request.getSubject()
-        );
-
-        // -------------------------------------------------------------
-        // Topic
-        // -------------------------------------------------------------
-
-        payload.put(
-                "topic",
-                request.getTopic()
-        );
-
-        // -------------------------------------------------------------
-        // Difficulty
-        // -------------------------------------------------------------
-
-        payload.put(
-                "difficulty",
-                request.getDifficulty() != null
-                        ? request.getDifficulty().name()
-                        : null
-        );
-
-        // -------------------------------------------------------------
-        // Number of Questions
-        // -------------------------------------------------------------
-
-        payload.put(
-                "numberOfQuestions",
-                request.getNumberOfQuestions()
-        );
-
-        // -------------------------------------------------------------
-        // Question Type
-        // -------------------------------------------------------------
-
-        payload.put(
-                "questionType",
-                request.getQuestionType() != null
-                        ? request.getQuestionType().name()
-                        : null
-        );
-
-        // -------------------------------------------------------------
-        // Additional Instructions
-        // -------------------------------------------------------------
-
-        payload.put(
-                "additionalInstructions",
-                request.getAdditionalInstructions()
-        );
-
-        // -------------------------------------------------------------
-        // Language
-        // -------------------------------------------------------------
-
-        payload.put(
-                "language",
-                request.getLanguage()
-        );
-
-        return payload;
+        JsonNode content = parsed.get("content");
+        if (content == null || content.isNull()) {
+            throw new AiAgentValidationException(
+                    "UiPath OutputArguments did not contain the expected 'content' object");
+        }
+        return content;
     }
 
     // =========================================================================
-    // Validate and Parse UiPath Response
+    // Build UiPath Input Arguments (as a JSON string, per the API contract)
     // =========================================================================
 
-    private QuizGenerationResponse validateAndParse(
-            JsonNode json) {
-
-        if (json == null
-                || json.isNull()
-                || json.isMissingNode()) {
-
-            throw new AiAgentValidationException(
-                    "UiPath agent returned an empty response"
-            );
-        }
-
-        // -------------------------------------------------------------
-        // Validate quiz title
-        // -------------------------------------------------------------
-
-        if (!json.hasNonNull("quizTitle")
-                || !StringUtils.hasText(
-                json.get("quizTitle").asText())) {
-
-            throw new AiAgentValidationException(
-                    "UiPath agent response is missing a required 'quizTitle' field"
-            );
-        }
-
-        // -------------------------------------------------------------
-        // Validate questions
-        // -------------------------------------------------------------
-
-        if (!json.has("questions")
-                || !json.get("questions").isArray()
-                || json.get("questions").isEmpty()) {
-
-            throw new AiAgentValidationException(
-                    "UiPath agent response is missing a non-empty 'questions' array"
-            );
-        }
-
-        // -------------------------------------------------------------
-        // Validate every question
-        // -------------------------------------------------------------
-
-        for (JsonNode question :
-                json.get("questions")) {
-
-            if (!question.hasNonNull("questionText")
-                    || !StringUtils.hasText(
-                    question.get("questionText").asText())) {
-
-                throw new AiAgentValidationException(
-                        "One or more questions in the UiPath agent response "
-                                + "is missing 'questionText'"
-                );
-            }
-        }
-
-        // -------------------------------------------------------------
-        // Convert JSON → QuizGenerationResponse
-        // -------------------------------------------------------------
+    /**
+     * The agent's Pydantic input schema requires exactly: exam, subject,
+     * topic, difficulty, questionCount - confirmed via a live validation
+     * error ("5 validation errors for CompleteAgentGraphState"). Note
+     * {@code questionCount}, NOT {@code numberOfQuestions} -
+     * QuizGenerationRequest keeps its own field name; only the outgoing
+     * payload key is remapped here.
+     */
+    private String toAgentInputJson(QuizGenerationRequest request) {
+        Map<String, Object> input = new LinkedHashMap<>();
+        input.put("exam", request.getExam() != null ? request.getExam().name() : null);
+        input.put("subject", request.getSubject());
+        input.put("topic", request.getTopic());
+        input.put("difficulty", request.getDifficulty() != null ? request.getDifficulty().name() : null);
+        input.put("questionCount", request.getNumberOfQuestions());
 
         try {
+            return objectMapper.writeValueAsString(input);
+        } catch (JsonProcessingException ex) {
+            throw new AiAgentException("Failed to serialize UiPath agent input arguments", ex);
+        }
+    }
 
-            QuizGenerationResponse response =
-                    objectMapper.treeToValue(
-                            json,
-                            QuizGenerationResponse.class
-                    );
+    // =========================================================================
+    // Validate and Parse the agent's quiz content into QuizGenerationResponse
+    // =========================================================================
+
+    private QuizGenerationResponse validateAndParse(JsonNode content) {
+        if (content == null || content.isNull() || content.isMissingNode()) {
+            throw new AiAgentValidationException("UiPath agent returned an empty response");
+        }
+
+        if (!content.hasNonNull("quizTitle") || !StringUtils.hasText(content.get("quizTitle").asText())) {
+            throw new AiAgentValidationException("UiPath agent response is missing a required 'quizTitle' field");
+        }
+
+        if (!content.has("questions") || !content.get("questions").isArray() || content.get("questions").isEmpty()) {
+            throw new AiAgentValidationException("UiPath agent response is missing a non-empty 'questions' array");
+        }
+
+        for (JsonNode question : content.get("questions")) {
+            if (!question.hasNonNull("questionText") || !StringUtils.hasText(question.get("questionText").asText())) {
+                throw new AiAgentValidationException(
+                        "One or more questions in the UiPath agent response is missing 'questionText'");
+            }
+        }
+
+        try {
+            QuizGenerationResponse response = objectMapper.treeToValue(content, QuizGenerationResponse.class);
 
             if (response.getTotalQuestions() <= 0) {
-
-                response.setTotalQuestions(
-                        response.getQuestions().size()
-                );
+                response.setTotalQuestions(response.getQuestions().size());
             }
-
             if (response.getGeneratedAt() == null) {
-
-                response.setGeneratedAt(
-                        Instant.now()
-                );
+                response.setGeneratedAt(Instant.now());
             }
-
             return response;
 
         } catch (JsonProcessingException ex) {
-
             throw new AiAgentValidationException(
-                    "Failed to map UiPath agent response into "
-                            + "QuizGenerationResponse: "
-                            + ex.getOriginalMessage()
-            );
+                    "Failed to map UiPath agent response into QuizGenerationResponse: " + ex.getOriginalMessage());
         }
     }
 
     // =========================================================================
-    // Retry Policy
+    // Shared header helper
     // =========================================================================
 
-    private Retry retrySpec(
-            String operationName) {
-
-        return Retry
-                .backoff(
-                        properties.getMaxRetryAttempts(),
-                        Duration.ofMillis(
-                                properties.getRetryBackoffMs()
-                        )
-                )
-
-                .maxBackoff(
-                        Duration.ofSeconds(10)
-                )
-
-                .filter(
-                        this::isRetryable
-                )
-
-                .doBeforeRetry(signal ->
-                        log.warn(
-                                "Retrying UiPath {} "
-                                        + "(attempt {}/{}) "
-                                        + "after failure: {}",
-
-                                operationName,
-
-                                signal.totalRetries() + 1,
-
-                                properties.getMaxRetryAttempts(),
-
-                                signal.failure()
-                                        .getClass()
-                                        .getSimpleName()
-                        )
-                )
-
-                .onRetryExhaustedThrow(
-                        (retryBackoffSpec, signal) ->
-                                new AiAgentTimeoutException(
-                                        "UiPath "
-                                                + operationName
-                                                + " failed after "
-                                                + properties.getMaxRetryAttempts()
-                                                + " retr"
-                                                + (
-                                                properties.getMaxRetryAttempts()
-                                                        == 1
-                                                        ? "y"
-                                                        : "ies"
-                                        ),
-
-                                        signal.failure()
-                                )
-                );
+    private void applyOrchestratorHeaders(org.springframework.http.HttpHeaders headers, String accessToken) {
+        headers.setBearerAuth(accessToken);
+        headers.set(ORG_UNIT_HEADER, String.valueOf(properties.getFolderId()));
+        if (StringUtils.hasText(properties.getTenantName())) {
+            headers.set("X-UIPATH-TenantName", properties.getTenantName());
+        }
     }
 
-    /**
-     * Determines whether an exception is transient and should be retried.
-     */
-    private boolean isRetryable(
-            Throwable throwable) {
+    // =========================================================================
+    // Retry Policy (for auth + job-start network calls, not job polling)
+    // =========================================================================
 
-        // Authentication errors should not be retried
-        // using the same credentials.
-        if (throwable
-                instanceof AiAgentAuthenticationException) {
+    private Retry retrySpec(String operationName) {
+        return Retry.backoff(properties.getMaxRetryAttempts(), Duration.ofMillis(properties.getRetryBackoffMs()))
+                .maxBackoff(Duration.ofSeconds(10))
+                .filter(this::isRetryable)
+                .doBeforeRetry(signal -> log.warn(
+                        "Retrying UiPath {} (attempt {}/{}) after failure: {}",
+                        operationName, signal.totalRetries() + 1, properties.getMaxRetryAttempts(),
+                        signal.failure().getClass().getSimpleName()))
+                .onRetryExhaustedThrow((retryBackoffSpec, signal) -> new AiAgentTimeoutException(
+                        "UiPath " + operationName + " failed after " + properties.getMaxRetryAttempts()
+                                + " retr" + (properties.getMaxRetryAttempts() == 1 ? "y" : "ies"),
+                        signal.failure()));
+    }
 
+    private boolean isRetryable(Throwable throwable) {
+        if (throwable instanceof AiAgentAuthenticationException) {
             return false;
         }
-
-        // Timeout → retry
-        if (throwable
-                instanceof TimeoutException) {
-
+        if (throwable instanceof TimeoutException) {
             return true;
         }
-
-        // Server errors → retry
-        if (throwable
-                instanceof WebClientResponseException
-                webClientResponseException) {
-
-            return webClientResponseException
-                    .getStatusCode()
-                    .is5xxServerError();
+        if (throwable instanceof WebClientResponseException webClientResponseException) {
+            return webClientResponseException.getStatusCode().is5xxServerError();
         }
-
-        // Network errors → retry
-        return throwable
-                instanceof WebClientRequestException;
+        return throwable instanceof WebClientRequestException;
     }
 
     // =========================================================================
     // Cached Token
     // =========================================================================
 
-    /**
-     * Cached OAuth access token.
-     *
-     * <p>
-     * The token is never logged or returned to the frontend.
-     */
-    private record CachedToken(
-            String accessToken,
-            Instant expiresAt) {
-
+    private record CachedToken(String accessToken, Instant expiresAt) {
         boolean isValid() {
-
-            return accessToken != null
-                    && expiresAt != null
-                    && Instant.now()
-                    .isBefore(expiresAt);
+            return accessToken != null && expiresAt != null && Instant.now().isBefore(expiresAt);
         }
     }
 }
