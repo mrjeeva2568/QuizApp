@@ -2,17 +2,22 @@ package com.examquizai.backend.service.impl;
 
 import com.examquizai.backend.config.UiPathProperties;
 import com.examquizai.backend.dto.request.QuizGenerationRequest;
+import com.examquizai.backend.dto.response.GeneratedOptionResponse;
+import com.examquizai.backend.dto.response.GeneratedQuestionResponse;
 import com.examquizai.backend.dto.response.QuizGenerationResponse;
 import com.examquizai.backend.exception.AiAgentAuthenticationException;
 import com.examquizai.backend.exception.AiAgentException;
 import com.examquizai.backend.exception.AiAgentTimeoutException;
 import com.examquizai.backend.exception.AiAgentValidationException;
+import com.examquizai.backend.model.enums.DifficultyLevel;
+import com.examquizai.backend.model.enums.QuestionType;
 import com.examquizai.backend.service.AiAgentService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import java.util.Iterator;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
@@ -28,7 +33,9 @@ import reactor.util.retry.Retry;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.TimeoutException;
@@ -319,43 +326,78 @@ public class UiPathAgentService implements AiAgentService {
     // Validate and Parse the agent's quiz content into QuizGenerationResponse
     // =========================================================================
 
-    private QuizGenerationResponse validateAndParse(JsonNode content) {
-        if (content == null || content.isNull() || content.isMissingNode()) {
-            throw new AiAgentValidationException("UiPath agent returned an empty response");
-        }
+   private QuizGenerationResponse validateAndParse(JsonNode content) {
+    if (content == null || content.isNull() || content.isMissingNode()) {
+        throw new AiAgentValidationException("UiPath agent returned an empty response");
+    }
 
-        if (!content.hasNonNull("quizTitle") || !StringUtils.hasText(content.get("quizTitle").asText())) {
-            throw new AiAgentValidationException("UiPath agent response is missing a required 'quizTitle' field");
-        }
-
-        if (!content.has("questions") || !content.get("questions").isArray() || content.get("questions").isEmpty()) {
-            throw new AiAgentValidationException("UiPath agent response is missing a non-empty 'questions' array");
-        }
-
-        for (JsonNode question : content.get("questions")) {
-            if (!question.hasNonNull("questionText") || !StringUtils.hasText(question.get("questionText").asText())) {
-                throw new AiAgentValidationException(
-                        "One or more questions in the UiPath agent response is missing 'questionText'");
-            }
-        }
-
+    // Defensive: extractOutputArguments() should already hand us an object
+    // node, but if the agent ever double-encodes "content" itself, unwrap it.
+    JsonNode quizNode = content;
+    if (content.isTextual()) {
         try {
-            QuizGenerationResponse response = objectMapper.treeToValue(content, QuizGenerationResponse.class);
-
-            if (response.getTotalQuestions() <= 0) {
-                response.setTotalQuestions(response.getQuestions().size());
-            }
-            if (response.getGeneratedAt() == null) {
-                response.setGeneratedAt(Instant.now());
-            }
-            return response;
-
+            quizNode = objectMapper.readTree(content.asText());
         } catch (JsonProcessingException ex) {
             throw new AiAgentValidationException(
-                    "Failed to map UiPath agent response into QuizGenerationResponse: " + ex.getOriginalMessage());
+                    "UiPath agent content was a string but not valid JSON: " + ex.getOriginalMessage());
         }
     }
 
+    if (!quizNode.hasNonNull("quizTitle") || !StringUtils.hasText(quizNode.get("quizTitle").asText())) {
+        throw new AiAgentValidationException("UiPath agent response is missing a required 'quizTitle' field");
+    }
+    if (!quizNode.has("questions") || !quizNode.get("questions").isArray() || quizNode.get("questions").isEmpty()) {
+        throw new AiAgentValidationException("UiPath agent response is missing a non-empty 'questions' array");
+    }
+
+    List<GeneratedQuestionResponse> questions = new ArrayList<>();
+    for (JsonNode q : quizNode.get("questions")) {
+        String questionText = q.hasNonNull("question") ? q.get("question").asText() : null;
+        if (!StringUtils.hasText(questionText)) {
+            throw new AiAgentValidationException("One or more questions is missing a 'question' field");
+        }
+
+        String correctLetter = q.hasNonNull("correctAnswer") ? q.get("correctAnswer").asText() : null;
+        List<GeneratedOptionResponse> options = new ArrayList<>();
+        if (q.has("options") && q.get("options").isObject()) {
+            Iterator<Map.Entry<String, JsonNode>> fields = q.get("options").fields();
+            while (fields.hasNext()) {
+                Map.Entry<String, JsonNode> entry = fields.next();
+                options.add(GeneratedOptionResponse.builder()
+                        .id(entry.getKey())
+                        .text(entry.getValue().asText())
+                        .correct(entry.getKey().equalsIgnoreCase(correctLetter))
+                        .build());
+            }
+        }
+
+        questions.add(GeneratedQuestionResponse.builder()
+                .questionText(questionText)
+                .questionType(QuestionType.MULTIPLE_CHOICE)
+                .options(options)
+                .explanation(q.hasNonNull("explanation") ? q.get("explanation").asText() : null)
+                .points(1.0)
+                .build());
+    }
+
+    DifficultyLevel difficulty = null;
+    if (quizNode.hasNonNull("difficulty")) {
+        try {
+            difficulty = DifficultyLevel.valueOf(quizNode.get("difficulty").asText().toUpperCase());
+        } catch (IllegalArgumentException ignored) {
+            // leave null rather than fail the whole quiz over a cosmetic field
+        }
+    }
+
+    return QuizGenerationResponse.builder()
+            .quizTitle(quizNode.get("quizTitle").asText())
+            .subject(quizNode.hasNonNull("subject") ? quizNode.get("subject").asText() : null)
+            .difficulty(difficulty)
+            .totalQuestions(questions.size())
+            .questions(questions)
+            .generatedAt(Instant.now())
+            .build();
+}
     // =========================================================================
     // Shared header helper
     // =========================================================================
