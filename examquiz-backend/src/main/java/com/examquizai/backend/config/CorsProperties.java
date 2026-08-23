@@ -22,7 +22,7 @@ public class CorsProperties {
     /**
      * Comma-separated list of allowed HTTP methods.
      */
-    private List<String> allowedMethods;
+        private List<String> allowedMethods = List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS");
 
     /**
      * Comma-separated list of allowed headers. "*" allows all.
