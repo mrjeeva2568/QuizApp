@@ -7,7 +7,9 @@ function BarRow({ label, count, max }) {
   const width = max > 0 ? Math.max((count / max) * 100, count > 0 ? 4 : 0) : 0;
   return (
     <div className="flex items-center gap-3 text-sm">
-      <span className="w-16 shrink-0 font-mono text-ink-500 dark:text-ink-400">{label}</span>
+      <span className="w-24 shrink-0 truncate font-mono text-ink-500 dark:text-ink-400" title={label}>
+        {label}
+      </span>
       <div className="h-3 flex-1 overflow-hidden rounded-full bg-ink-100 dark:bg-ink-800">
         <div className="h-full rounded-full bg-brand-500" style={{ width: `${width}%` }} />
       </div>
@@ -97,13 +99,10 @@ export function AdminAnalyticsPage() {
           {data.attemptsOverTime.length === 0 ? (
             <p className="py-6 text-center text-sm text-ink-400">No attempts in this period.</p>
           ) : (
-            <div className="overflow-x-auto">
-              <div
-                className="flex h-32 items-end gap-1"
-                style={{ minWidth: `${Math.max(data.attemptsOverTime.length * 14, 100)}%` }}
-              >
+            <div className="h-32">
+              <div className="flex h-full items-end gap-1">
                 {data.attemptsOverTime.map((day) => (
-                  <div key={day.date} className="group relative flex-1">
+                  <div key={day.date} className="group relative h-full flex-1">
                     <div
                       className="rounded-t bg-brand-500 transition-colors group-hover:bg-brand-600 group-active:bg-brand-600"
                       style={{ height: `${Math.max((day.count / maxDailyCount) * 100, day.count > 0 ? 6 : 2)}%` }}
@@ -127,9 +126,11 @@ export function AdminAnalyticsPage() {
           ) : (
             <ul className="divide-y divide-ink-100 dark:divide-ink-800">
               {data.topQuizzes.map((quiz) => (
-                <li key={quiz.quizId} className="flex items-center justify-between py-3 text-sm">
-                  <span className="font-medium text-ink-900 dark:text-ink-50">{quiz.quizTitle}</span>
-                  <span className="font-mono text-ink-500 dark:text-ink-400">
+                <li key={quiz.quizId} className="flex items-center justify-between gap-4 py-3 text-sm">
+                  <span className="min-w-0 truncate font-medium text-ink-900 dark:text-ink-50" title={quiz.quizTitle}>
+                    {quiz.quizTitle}
+                  </span>
+                  <span className="shrink-0 font-mono text-ink-500 dark:text-ink-400">
                     {quiz.attemptCount} attempts
                     {quiz.averageScorePercentage != null && ` · ${Math.round(quiz.averageScorePercentage)}% avg`}
                   </span>

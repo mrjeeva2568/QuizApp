@@ -1,5 +1,6 @@
 package com.examquizai.backend.repository.impl;
 
+
 import com.examquizai.backend.model.enums.AttemptStatus;
 import com.examquizai.backend.repository.QuizAttemptRepositoryCustom;
 import com.examquizai.backend.repository.projection.DailyAttemptCount;
@@ -13,11 +14,15 @@ import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.aggregation.Aggregation;
 import org.springframework.data.mongodb.core.aggregation.AggregationResults;
+import org.springframework.data.mongodb.core.aggregation.DateOperators;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.stereotype.Repository;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -45,7 +50,7 @@ public class QuizAttemptRepositoryCustomImpl implements QuizAttemptRepositoryCus
      * Score-percentage bucket boundaries (upper-exclusive), matched to
      * {@link #BUCKET_LABELS} by array position.
      */
-    private static final double[] BUCKET_BOUNDARIES = {0, 20, 40, 60, 80, 100, 101};
+    private static final Double[] BUCKET_BOUNDARIES = {0.0, 20.0, 40.0, 60.0, 80.0, 100.0, 101.0};
     private static final String[] BUCKET_LABELS = {"0-19", "20-39", "40-59", "60-79", "80-99", "100"};
 
     private final MongoTemplate mongoTemplate;
@@ -147,7 +152,10 @@ public class QuizAttemptRepositoryCustomImpl implements QuizAttemptRepositoryCus
     public List<SubjectStats> aggregateSubjectBreakdown() {
         Aggregation aggregation = Aggregation.newAggregation(
                 Aggregation.match(Criteria.where("status").is(AttemptStatus.EVALUATED)),
-                Aggregation.lookup("quizzes", "quizId", "_id", "quiz"),
+            Aggregation.addFields()
+                .addFieldWithValue("quizObjectId", new Document("$toObjectId", "$quizId"))
+                .build(),
+            Aggregation.lookup("quizzes", "quizObjectId", "_id", "quiz"),
                 Aggregation.unwind("quiz", true),
                 Aggregation.project("score", "maxScore").and("quiz.subject").as("subject"),
                 Aggregation.group("subject")
@@ -165,16 +173,13 @@ public class QuizAttemptRepositoryCustomImpl implements QuizAttemptRepositoryCus
 
     @Override
     public List<DailyAttemptCount> aggregateAttemptsOverTime(int days) {
-        Instant since = Instant.now().minus(days, ChronoUnit.DAYS);
+        LocalDate endDate = LocalDate.now(ZoneOffset.UTC);
+        LocalDate startDate = endDate.minusDays(days - 1L);
+        Instant since = startDate.atStartOfDay(ZoneOffset.UTC).toInstant();
 
-        // NOTE: this SpEL-string form of $dateToString is the commonly-documented
-        // pattern for Spring Data MongoDB, but wasn't verified against a live
-        // MongoDB instance in this environment. If it doesn't compile/execute as
-        // expected against your Spring Data MongoDB version, the safer fallback
-        // is DateOperators.dateOf("createdAt") with the fluent DateToString builder.
         Aggregation aggregation = Aggregation.newAggregation(
                 Aggregation.match(Criteria.where("createdAt").gte(since)),
-                Aggregation.project().andExpression("dateToString('%Y-%m-%d', createdAt)").as("day"),
+                Aggregation.project().and(DateOperators.dateOf("createdAt").toString("%Y-%m-%d")).as("day"),
                 Aggregation.group("day").count().as("count"),
                 Aggregation.project("count").and("_id").as("date"),
                 Aggregation.sort(Sort.Direction.ASC, "date")
@@ -182,7 +187,19 @@ public class QuizAttemptRepositoryCustomImpl implements QuizAttemptRepositoryCus
 
         AggregationResults<DailyAttemptCount> results =
                 mongoTemplate.aggregate(aggregation, COLLECTION, DailyAttemptCount.class);
-        return results.getMappedResults();
+
+        Map<String, Long> countsByDate = new LinkedHashMap<>();
+        for (DailyAttemptCount result : results.getMappedResults()) {
+            countsByDate.put(result.getDate(), result.getCount());
+        }
+
+        List<DailyAttemptCount> dailyCounts = new java.util.ArrayList<>();
+        DateTimeFormatter formatter = DateTimeFormatter.ISO_LOCAL_DATE;
+        for (LocalDate date = startDate; !date.isAfter(endDate); date = date.plusDays(1)) {
+            String dateKey = date.format(formatter);
+            dailyCounts.add(new DailyAttemptCount(dateKey, countsByDate.getOrDefault(dateKey, 0L)));
+        }
+        return dailyCounts;
     }
 
     @Override

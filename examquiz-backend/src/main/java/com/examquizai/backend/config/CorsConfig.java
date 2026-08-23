@@ -7,6 +7,7 @@ import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
+
 /**
  * Centralized CORS configuration, driven by {@link CorsProperties}.
  * Consumed by {@link SecurityConfig} so both filter chain and MVC layer share one source of truth.

@@ -112,10 +112,19 @@ export function AdminStudentsPage() {
     setUpdatingId(student.id);
     try {
       const updated = await adminService.updateStudentStatus(student.id, !student.enabled);
-      setData((prev) => ({
-        ...prev,
-        content: prev.content.map((s) => (s.id === updated.id ? updated : s)),
-      }));
+      setData((prev) => {
+        const matchesFilter =
+          enabledFilter === 'all' || String(updated.enabled) === enabledFilter;
+        const content = matchesFilter
+          ? prev.content.map((s) => (s.id === updated.id ? updated : s))
+          : prev.content.filter((s) => s.id !== updated.id);
+
+        return {
+          ...prev,
+          content,
+          totalElements: matchesFilter ? prev.totalElements : prev.totalElements - 1,
+        };
+      });
     } catch (err) {
       setError(getErrorMessage(err, 'Could not update that student.'));
     } finally {
