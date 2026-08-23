@@ -58,4 +58,6 @@ public interface QuizAttemptRepository extends MongoRepository<QuizAttempt, Stri
     long countByUserIdAndStatus(String userId, AttemptStatus status);
 
     long countByQuizId(String quizId);
+    // add to the interface
+long deleteByUserId(String userId);
 }

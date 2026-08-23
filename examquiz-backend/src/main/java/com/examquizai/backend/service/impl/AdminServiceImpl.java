@@ -31,6 +31,7 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -154,6 +155,21 @@ public class AdminServiceImpl implements AdminService {
         Map<String, StudentAttemptStats> stats = quizAttemptRepository.aggregateStatsByUserIds(List.of(studentId));
         return toStudentSummary(saved, stats.get(studentId));
     }
+    @Override
+@Transactional
+public void deleteStudent(String studentId) {
+    User student = userRepository.findById(studentId)
+            .orElseThrow(() -> new ResourceNotFoundException("User", "id", studentId));
+
+    if (!student.getRoles().contains(Role.STUDENT)) {
+        throw new BadRequestException("Only STUDENT accounts can be deleted through this endpoint");
+    }
+
+    long removedAttempts = quizAttemptRepository.deleteByUserId(studentId);
+    userRepository.delete(student);
+
+    log.info("Student {} deleted by admin action ({} attempt(s) removed)", studentId, removedAttempts);
+}
 
     private StudentSummaryResponse toStudentSummary(User user, StudentAttemptStats stats) {
         long totalAttempts = stats != null ? stats.getTotalAttempts() : 0L;

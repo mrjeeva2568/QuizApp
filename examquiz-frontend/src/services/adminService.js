@@ -12,6 +12,9 @@ export const adminService = {
     });
     return response.data.data; // PageResponse<StudentSummaryResponse>
   },
+  async deleteStudent(id) {
+  await apiClient.delete(`/api/admin/students/${id}`);
+},
 
   async getAnalytics() {
     const response = await apiClient.get('/api/admin/analytics');

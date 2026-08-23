@@ -6,6 +6,7 @@ import { useDebounce } from '../../hooks/useDebounce';
 import { ScoreRing } from '../../components/common/ScoreRing';
 import { Spinner } from '../../components/common/Spinner';
 import { Pagination } from '../../components/common/Pagination';
+import { ConfirmDialog } from '../../components/common/ConfirmDialog';
 
 const PAGE_SIZE = 10;
 
@@ -42,6 +43,19 @@ function StatusToggleButton({ student, isUpdating, onToggle }) {
   );
 }
 
+function DeleteButton({ student, isDeleting, onDelete, className = '' }) {
+  return (
+    <button
+      type="button"
+      onClick={() => onDelete(student)}
+      disabled={isDeleting}
+      className={`btn-danger ${className}`}
+    >
+      {isDeleting ? <Spinner size="sm" className="border-white border-t-transparent" /> : 'Delete'}
+    </button>
+  );
+}
+
 export function AdminStudentsPage() {
   const [search, setSearch] = useState('');
   const [enabledFilter, setEnabledFilter] = useState('all'); // 'all' | 'true' | 'false'
@@ -50,6 +64,8 @@ export function AdminStudentsPage() {
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [updatingId, setUpdatingId] = useState(null);
+  const [deletingId, setDeletingId] = useState(null);
+  const [studentToDelete, setStudentToDelete] = useState(null);
 
   // Debounced so typing doesn't fire a request per keystroke - search-as-you-type
   // without a "Search" button to click, but without hammering the backend either.
@@ -104,6 +120,24 @@ export function AdminStudentsPage() {
       setError(getErrorMessage(err, 'Could not update that student.'));
     } finally {
       setUpdatingId(null);
+    }
+  }
+
+  async function confirmDelete() {
+    if (!studentToDelete) return;
+    setDeletingId(studentToDelete.id);
+    try {
+      await adminService.deleteStudent(studentToDelete.id);
+      setData((prev) => ({
+        ...prev,
+        content: prev.content.filter((s) => s.id !== studentToDelete.id),
+        totalElements: prev.totalElements - 1,
+      }));
+    } catch (err) {
+      setError(getErrorMessage(err, 'Could not delete that student.'));
+    } finally {
+      setDeletingId(null);
+      setStudentToDelete(null);
     }
   }
 
@@ -188,6 +222,12 @@ export function AdminStudentsPage() {
                           isUpdating={updatingId === student.id}
                           onToggle={toggleStatus}
                         />
+                        <DeleteButton
+                          student={student}
+                          isDeleting={deletingId === student.id}
+                          onDelete={setStudentToDelete}
+                          className="ml-2"
+                        />
                       </td>
                     </tr>
                   ))}
@@ -210,11 +250,18 @@ export function AdminStudentsPage() {
                       </span>
                     </div>
                   </div>
-                  <StatusToggleButton
-                    student={student}
-                    isUpdating={updatingId === student.id}
-                    onToggle={toggleStatus}
-                  />
+                  <div className="flex shrink-0 flex-col gap-2">
+                    <StatusToggleButton
+                      student={student}
+                      isUpdating={updatingId === student.id}
+                      onToggle={toggleStatus}
+                    />
+                    <DeleteButton
+                      student={student}
+                      isDeleting={deletingId === student.id}
+                      onDelete={setStudentToDelete}
+                    />
+                  </div>
                 </div>
               ))}
             </div>
@@ -230,6 +277,16 @@ export function AdminStudentsPage() {
           </>
         )}
       </div>
+
+      <ConfirmDialog
+        open={Boolean(studentToDelete)}
+        title="Delete student account?"
+        message={`This permanently deletes ${studentToDelete?.fullName}'s account and all their quiz attempts. This can't be undone.`}
+        confirmLabel="Delete"
+        onConfirm={confirmDelete}
+        onCancel={() => setStudentToDelete(null)}
+        tone="danger"
+      />
     </div>
   );
 }

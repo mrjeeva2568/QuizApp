@@ -25,4 +25,9 @@ public interface AdminService {
      * accounts (e.g. attempting to disable an ADMIN through this endpoint).
      */
     StudentSummaryResponse updateStudentStatus(String studentId, boolean enabled);
+    /**
+ * Permanently deletes a STUDENT account and all of their quiz attempts.
+ * Rejects targets that are not STUDENT accounts.
+ */
+void deleteStudent(String studentId);
 }

@@ -18,6 +18,7 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -74,4 +75,10 @@ public class AdminController {
         String message = request.getEnabled() ? "Student account enabled" : "Student account disabled";
         return ResponseEntity.ok(ApiResponse.success(message, response));
     }
+    @Operation(summary = "Permanently delete a STUDENT account and their quiz attempts")
+@DeleteMapping("/students/{id}")
+public ResponseEntity<ApiResponse<Void>> deleteStudent(@PathVariable String id) {
+    adminService.deleteStudent(id);
+    return ResponseEntity.ok(ApiResponse.message("Student account deleted"));
+}
 }
