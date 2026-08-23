@@ -110,7 +110,18 @@ public class QuizServiceImpl implements QuizService {
     // ============================================================
     // CONVERT AI RESPONSE -> QUIZ ENTITY
     // ============================================================
-
+/**
+ * Builds a human-friendly quiz title from what the student actually chose,
+ * rather than trusting whatever generic title the UiPath agent returns
+ * (e.g. "ExamQuiz AI Practice Test"). Falls back to the agent's title only
+ * if no topic was provided.
+ */
+private String buildQuizTitle(QuizGenerationRequest request) {
+    if (StringUtils.hasText(request.getTopic())) {
+        return request.getTopic().trim();
+    }
+    return "Practice Quiz";
+}
     private Quiz toQuizEntity(
             QuizGenerationResponse generated,
             QuizGenerationRequest request,
@@ -180,7 +191,7 @@ public class QuizServiceImpl implements QuizService {
         }
 
         return Quiz.builder()
-                .title(generated.getQuizTitle())
+               .title(buildQuizTitle(request)) 
                 .description(generated.getDescription())
 
                 // Frontend selected exam

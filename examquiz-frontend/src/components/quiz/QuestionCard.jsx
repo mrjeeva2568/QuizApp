@@ -1,5 +1,5 @@
 const TYPE_LABELS = {
-  MULTIPLE_CHOICE: 'Select all that apply',
+  MULTIPLE_CHOICE: 'Select one option',
   TRUE_FALSE: 'True or false',
   SHORT_ANSWER: 'Short answer',
 };
@@ -10,29 +10,25 @@ const TYPE_LABELS = {
  * can be MIXED) - QuizQuestionPublicResponse carries its own type per the
  * backend contract.
  *
- * MULTIPLE_CHOICE renders as checkboxes (multi-select), not radio buttons:
- * the backend's grading (QuizServiceImpl#gradeAnswer) requires an exact-set
- * match against correctOptionIds, which could legitimately contain more
- * than one id for a "select all that apply" question. Restricting to
- * single-select here would make such a question structurally impossible to
- * answer correctly. TRUE_FALSE is genuinely single-select (exactly one of
- * two options is true), so it renders as a radio group.
+ * Both MULTIPLE_CHOICE and TRUE_FALSE are single-select (radio-style) here.
+ *
+ * NOTE: the backend's grading (QuizServiceImpl#gradeAnswer) requires an
+ * exact-set match between selectedOptionIds and correctOptionIds. Since this
+ * UI now only ever sends a single selected id, any MULTIPLE_CHOICE question
+ * that was generated with more than one correct option will become
+ * unanswerable correctly. If your quiz-generation agent can produce
+ * multi-answer MULTIPLE_CHOICE questions, either constrain it to always
+ * generate exactly one correct option per MULTIPLE_CHOICE question, or keep
+ * this UI change scoped to questions you know are single-answer.
  */
 export function QuestionCard({ question, value, onChange }) {
   const selectedOptionIds = value?.selectedOptionIds || [];
   const textAnswer = value?.textAnswer || '';
-  const isRadio = question.questionType === 'TRUE_FALSE';
-  const isOptionBased = question.questionType === 'MULTIPLE_CHOICE' || isRadio;
+  const isOptionBased = question.questionType === 'MULTIPLE_CHOICE' || question.questionType === 'TRUE_FALSE';
 
-  function toggleOption(optionId) {
-    if (isRadio) {
-      onChange({ selectedOptionIds: [optionId], textAnswer: '' });
-      return;
-    }
-    const next = selectedOptionIds.includes(optionId)
-      ? selectedOptionIds.filter((id) => id !== optionId)
-      : [...selectedOptionIds, optionId];
-    onChange({ selectedOptionIds: next, textAnswer: '' });
+  function selectOption(optionId) {
+    // Single-select: selecting a new option replaces any previous selection.
+    onChange({ selectedOptionIds: [optionId], textAnswer: '' });
   }
 
   function handleTextChange(event) {
@@ -53,17 +49,16 @@ export function QuestionCard({ question, value, onChange }) {
       <p className="mb-5 text-base font-medium text-ink-900 dark:text-ink-50">{question.questionText}</p>
 
       {isOptionBased && (
-        <div role={isRadio ? 'radiogroup' : 'group'} aria-label="Answer options" className="space-y-2">
+        <div role="radiogroup" aria-label="Answer options" className="space-y-2">
           {question.options.map((option) => {
             const selected = selectedOptionIds.includes(option.id);
             return (
               <button
                 key={option.id}
                 type="button"
-                role={isRadio ? 'radio' : undefined}
-                aria-checked={isRadio ? selected : undefined}
-                aria-pressed={!isRadio ? selected : undefined}
-                onClick={() => toggleOption(option.id)}
+                role="radio"
+                aria-checked={selected}
+                onClick={() => selectOption(option.id)}
                 className={`flex w-full items-center gap-3 rounded-lg border px-4 py-3 text-left text-sm transition-colors ${
                   selected
                     ? 'border-brand-500 bg-brand-50 text-brand-800 dark:border-brand-600 dark:bg-brand-900/30 dark:text-brand-200'
@@ -71,7 +66,7 @@ export function QuestionCard({ question, value, onChange }) {
                 }`}
               >
                 <span
-                  className={`grid h-4 w-4 shrink-0 place-items-center border ${isRadio ? 'rounded-full' : 'rounded'} ${
+                  className={`grid h-4 w-4 shrink-0 place-items-center rounded-full border ${
                     selected ? 'border-brand-600 bg-brand-600' : 'border-ink-300 dark:border-ink-600'
                   }`}
                   aria-hidden="true"
