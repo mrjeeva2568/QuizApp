@@ -10,39 +10,6 @@ import { ConfirmDialog } from '../../components/common/ConfirmDialog';
 
 const PAGE_SIZE = 10;
 
-function StatusBadge({ enabled }) {
-  return (
-    <span
-      className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
-        enabled
-          ? 'bg-success-50 text-success-600 dark:bg-success-500/10'
-          : 'bg-danger-50 text-danger-600 dark:bg-danger-500/10'
-      }`}
-    >
-      {enabled ? 'Active' : 'Disabled'}
-    </span>
-  );
-}
-
-function StatusToggleButton({ student, isUpdating, onToggle }) {
-  return (
-    <button
-      type="button"
-      onClick={() => onToggle(student)}
-      disabled={isUpdating}
-      className={student.enabled ? 'btn-danger' : 'btn-primary'}
-    >
-      {isUpdating ? (
-        <Spinner size="sm" className="border-white border-t-transparent" />
-      ) : student.enabled ? (
-        'Disable'
-      ) : (
-        'Enable'
-      )}
-    </button>
-  );
-}
-
 function DeleteButton({ student, isDeleting, onDelete, className = '' }) {
   return (
     <button
@@ -58,12 +25,10 @@ function DeleteButton({ student, isDeleting, onDelete, className = '' }) {
 
 export function AdminStudentsPage() {
   const [search, setSearch] = useState('');
-  const [enabledFilter, setEnabledFilter] = useState('all'); // 'all' | 'true' | 'false'
   const [page, setPage] = useState(0);
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(true);
-  const [updatingId, setUpdatingId] = useState(null);
   const [deletingId, setDeletingId] = useState(null);
   const [studentToDelete, setStudentToDelete] = useState(null);
 
@@ -78,7 +43,6 @@ export function AdminStudentsPage() {
     adminService
       .getStudents({
         search: debouncedSearch,
-        enabled: enabledFilter === 'all' ? undefined : enabledFilter === 'true',
         page,
         size: PAGE_SIZE,
       })
@@ -94,42 +58,13 @@ export function AdminStudentsPage() {
     return () => {
       cancelled = true;
     };
-  }, [debouncedSearch, enabledFilter, page]);
+  }, [debouncedSearch, page]);
 
   // Any filter change resets to page 0 - staying on page 3 of a now-shorter
   // result set would just show an empty/confusing page.
   function handleSearchChange(event) {
     setSearch(event.target.value);
     setPage(0);
-  }
-
-  function handleFilterChange(event) {
-    setEnabledFilter(event.target.value);
-    setPage(0);
-  }
-
-  async function toggleStatus(student) {
-    setUpdatingId(student.id);
-    try {
-      const updated = await adminService.updateStudentStatus(student.id, !student.enabled);
-      setData((prev) => {
-        const matchesFilter =
-          enabledFilter === 'all' || String(updated.enabled) === enabledFilter;
-        const content = matchesFilter
-          ? prev.content.map((s) => (s.id === updated.id ? updated : s))
-          : prev.content.filter((s) => s.id !== updated.id);
-
-        return {
-          ...prev,
-          content,
-          totalElements: matchesFilter ? prev.totalElements : prev.totalElements - 1,
-        };
-      });
-    } catch (err) {
-      setError(getErrorMessage(err, 'Could not update that student.'));
-    } finally {
-      setUpdatingId(null);
-    }
   }
 
   async function confirmDelete() {
@@ -153,7 +88,7 @@ export function AdminStudentsPage() {
   return (
     <div>
       <h1 className="text-2xl font-semibold text-ink-900 dark:text-ink-50">Students</h1>
-      <p className="mt-1 text-sm text-ink-500 dark:text-ink-400">Search, filter, and manage student accounts.</p>
+      <p className="mt-1 text-sm text-ink-500 dark:text-ink-400">Search and manage student accounts.</p>
 
       <div className="mt-6 flex flex-wrap items-center gap-3">
         <div className="relative min-w-[200px] flex-1">
@@ -167,16 +102,6 @@ export function AdminStudentsPage() {
             aria-label="Search students by name or email"
           />
         </div>
-        <select
-          className="input w-auto"
-          value={enabledFilter}
-          onChange={handleFilterChange}
-          aria-label="Filter by status"
-        >
-          <option value="all">All statuses</option>
-          <option value="true">Active only</option>
-          <option value="false">Disabled only</option>
-        </select>
       </div>
 
       <div className="mt-6 card overflow-hidden">
@@ -205,7 +130,6 @@ export function AdminStudentsPage() {
                     <th className="px-5 py-3 font-medium">Student</th>
                     <th className="px-5 py-3 font-medium">Attempts</th>
                     <th className="px-5 py-3 font-medium">Avg. score</th>
-                    <th className="px-5 py-3 font-medium">Status</th>
                     <th className="px-5 py-3 font-medium text-right">Action</th>
                   </tr>
                 </thead>
@@ -222,15 +146,7 @@ export function AdminStudentsPage() {
                       <td className="px-5 py-3">
                         <ScoreRing percentage={student.averageScorePercentage} size={36} strokeWidth={4} />
                       </td>
-                      <td className="px-5 py-3">
-                        <StatusBadge enabled={student.enabled} />
-                      </td>
                       <td className="px-5 py-3 text-right">
-                        <StatusToggleButton
-                          student={student}
-                          isUpdating={updatingId === student.id}
-                          onToggle={toggleStatus}
-                        />
                         <DeleteButton
                           student={student}
                           isDeleting={deletingId === student.id}
@@ -252,19 +168,11 @@ export function AdminStudentsPage() {
                   <div className="min-w-0 flex-1">
                     <p className="truncate font-medium text-ink-900 dark:text-ink-50">{student.fullName}</p>
                     <p className="truncate text-xs text-ink-400">{student.email}</p>
-                    <div className="mt-1.5 flex flex-wrap items-center gap-2">
-                      <StatusBadge enabled={student.enabled} />
-                      <span className="font-mono text-xs text-ink-500 dark:text-ink-400">
-                        {student.totalAttempts} attempts
-                      </span>
-                    </div>
+                    <p className="mt-1.5 font-mono text-xs text-ink-500 dark:text-ink-400">
+                      {student.totalAttempts} attempts
+                    </p>
                   </div>
                   <div className="flex shrink-0 flex-col gap-2">
-                    <StatusToggleButton
-                      student={student}
-                      isUpdating={updatingId === student.id}
-                      onToggle={toggleStatus}
-                    />
                     <DeleteButton
                       student={student}
                       isDeleting={deletingId === student.id}

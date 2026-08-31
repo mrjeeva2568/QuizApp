@@ -6,9 +6,9 @@ export const adminService = {
     return response.data.data; // AdminDashboardResponse
   },
 
-  async getStudents({ search, enabled, page = 0, size = 20 } = {}) {
+  async getStudents({ search, page = 0, size = 20 } = {}) {
     const response = await apiClient.get('/api/admin/students', {
-      params: { search: search || undefined, enabled, page, size },
+      params: { search: search || undefined, page, size },
     });
     return response.data.data; // PageResponse<StudentSummaryResponse>
   },
@@ -19,10 +19,5 @@ export const adminService = {
   async getAnalytics() {
     const response = await apiClient.get('/api/admin/analytics');
     return response.data.data; // AdminAnalyticsResponse
-  },
-
-  async updateStudentStatus(id, enabled) {
-    const response = await apiClient.patch(`/api/admin/students/${id}/status`, { enabled });
-    return response.data.data; // StudentSummaryResponse
   },
 };

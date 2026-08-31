@@ -41,10 +41,8 @@ export function AdminDashboardPage() {
       <h1 className="text-2xl font-semibold text-ink-900 dark:text-ink-50">Admin dashboard</h1>
       <p className="mt-1 text-sm text-ink-500 dark:text-ink-400">Platform overview at a glance.</p>
 
-      <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+      <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
         <StatCard label="Total students" value={data.totalStudents} />
-        <StatCard label="Active students" value={data.activeStudents} />
-        <StatCard label="Disabled students" value={data.disabledStudents} />
         <StatCard label="Quizzes generated" value={data.totalQuizzesGenerated} />
         <StatCard label="Total attempts" value={data.totalAttempts} />
       </div>
