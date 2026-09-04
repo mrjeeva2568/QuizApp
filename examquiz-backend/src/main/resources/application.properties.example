@@ -27,7 +27,7 @@ app.admin.full-name=${ADMIN_FULL_NAME:Platform Administrator}
 
 # ---------- CORS ----------
 
-app.cors.allowed-origins=${CORS_ALLOWED_ORIGINS:http://localhost:5173,https://quiz-app-git-main-jeeva-t.vercel.app,https://quiz-app-jeeva-t.vercel.app}
+app.cors.allowed-origins=${CORS_ALLOWED_ORIGINS:http://localhost:5173,https://quiz-app-seven-phi-45.vercel.app}
 app.cors.allowed-methods=GET,POST,PUT,PATCH,DELETE,OPTIONS
 app.cors.allowed-headers=*
 app.cors.allow-credentials=true

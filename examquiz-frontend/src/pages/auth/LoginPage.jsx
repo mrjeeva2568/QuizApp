@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { getErrorMessage } from '../../services/apiClient';
 import { useAuth } from '../../hooks/useAuth';
 import { ROUTE_PATHS, getHomeRoute } from '../../routes/routePaths';
@@ -16,12 +16,15 @@ const VALIDATORS = {
 export function LoginPage() {
   const { login } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
 
   const [form, setForm] = useState({ email: '', password: '' });
   const [touched, setTouched] = useState({});
   const [errors, setErrors] = useState({});
   const [serverError, setServerError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const redirectTo = location.state?.from?.pathname;
 
   function handleChange(event) {
     const { name, value } = event.target;
@@ -49,7 +52,7 @@ export function LoginPage() {
     setIsSubmitting(true);
     try {
       const user = await login(form);
-      navigate(getHomeRoute(user), { replace: true });
+      navigate(redirectTo || getHomeRoute(user), { replace: true });
     } catch (err) {
       setServerError(getErrorMessage(err, 'Invalid email or password.'));
     } finally {

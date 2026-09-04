@@ -40,42 +40,30 @@ function notifySessionExpired() {
 }
 
 let refreshPromise = null;
-let refreshTokenInFlight = null;
 
 function refreshAccessToken() {
   // Coalesce concurrent 401s into a single refresh call rather than firing
   // one refresh request per failed request.
-  const refreshToken = tokenStorage.getRefreshToken();
-  if (!refreshToken) {
-    return Promise.reject(new Error('No refresh token available'));
-  }
-  if (refreshPromise && refreshTokenInFlight === refreshToken) {
-    return refreshPromise;
-  }
+  if (!refreshPromise) {
+    const refreshToken = tokenStorage.getRefreshToken();
+    if (!refreshToken) {
+      return Promise.reject(new Error('No refresh token available'));
+    }
 
-  refreshTokenInFlight = refreshToken;
-  const request = axios
-    .post(`${API_BASE_URL}/api/v1/auth/refresh`, { refreshToken })
-    .then((response) => {
-      const data = response.data?.data;
-      if (!data?.accessToken) {
-        throw new Error('Refresh response did not contain an accessToken');
-      }
-      // Logout or a subsequent login may have replaced this refresh token
-      // while the request was in flight. Never resurrect that old session.
-      if (tokenStorage.getRefreshToken() !== refreshToken) {
-        throw new Error('Authentication session changed while refreshing');
-      }
-      tokenStorage.setSession(data);
-      return data.accessToken;
-    })
-    .finally(() => {
-      if (refreshPromise === request) {
+    refreshPromise = axios
+      .post(`${API_BASE_URL}/api/v1/auth/refresh`, { refreshToken })
+      .then((response) => {
+        const data = response.data?.data;
+        if (!data?.accessToken) {
+          throw new Error('Refresh response did not contain an accessToken');
+        }
+        tokenStorage.setSession(data);
+        return data.accessToken;
+      })
+      .finally(() => {
         refreshPromise = null;
-        refreshTokenInFlight = null;
-      }
-    });
-  refreshPromise = request;
+      });
+  }
   return refreshPromise;
 }
 
@@ -88,16 +76,13 @@ apiClient.interceptors.response.use(
 
     if (status === 401 && !originalRequest._retry && !isAuthEndpoint) {
       originalRequest._retry = true;
-      const refreshTokenAtRequest = tokenStorage.getRefreshToken();
       try {
         const newAccessToken = await refreshAccessToken();
         originalRequest.headers.Authorization = `Bearer ${newAccessToken}`;
         return apiClient(originalRequest);
       } catch (refreshError) {
-        if (tokenStorage.getRefreshToken() === refreshTokenAtRequest) {
-          tokenStorage.clear();
-          notifySessionExpired();
-        }
+        tokenStorage.clear();
+        notifySessionExpired();
         return Promise.reject(refreshError);
       }
     }
