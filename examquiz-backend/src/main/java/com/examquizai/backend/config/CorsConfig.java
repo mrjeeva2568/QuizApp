@@ -7,6 +7,8 @@ import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
+import java.util.stream.Collectors;
+
 @Configuration
 @RequiredArgsConstructor
 public class CorsConfig {
@@ -16,7 +18,11 @@ public class CorsConfig {
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
-        configuration.setAllowedOrigins(corsProperties.getAllowedOrigins());
+        configuration.setAllowedOrigins(corsProperties.getAllowedOrigins().stream()
+            .map(String::trim)
+            .map(origin -> origin.replaceAll("/+$", ""))
+            .filter(origin -> !origin.isBlank())
+            .collect(Collectors.toList()));
 
         configuration.setAllowedMethods(corsProperties.getAllowedMethods());
 
